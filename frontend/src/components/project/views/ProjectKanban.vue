@@ -604,7 +604,8 @@ async function updateTaskPosition(e) {
 				index,
 				position,
 			})
-			if (input) await filterMoveMutation.mutateAsync(input)
+			if (!input) return
+			await filterMoveMutation.mutateAsync(input)
 		} else {
 			if (bucket.id !== sourceBucket.value) {
 				const result = await moveMutation.mutateAsync({project, view, bucket: bucket.id, task})

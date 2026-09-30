@@ -1,10 +1,10 @@
 import {computed, toValue, type MaybeRefOrGetter} from 'vue'
 import {useI18n} from 'vue-i18n'
-import type {ProjectView} from '@/client/generated'
+import type {Label, ProjectView, User} from '@/client/generated'
 import {ensureLabels, getLabelById, refreshLabels} from '@/client/queries/labels'
 import type {FilterBucketPlacement} from '@/client/queries/taskCache'
-import type {FilterBucketMoveInput, FilterBucketWrite} from '@/client/queries/taskMutations'
-import type {TaskFilterParams, TaskResponse} from '@/client/queries/tasks'
+import type {FilterBucketMoveInput} from '@/client/queries/taskMutations'
+import {refreshTask, type TaskFilterParams, type TaskResponse} from '@/client/queries/tasks'
 import {searchProjectUsers} from '@/client/queries/userSearch'
 import {
 	findFilterValue,
@@ -13,6 +13,8 @@ import {
 	type BucketFilterEdit,
 } from '@/helpers/filterBuckets'
 import {error} from '@/message'
+
+type WithId<T> = T & {id: number}
 
 type Drop = {
 	task: TaskResponse
@@ -41,7 +43,7 @@ export function useFilterBucketDrop(
 		return getLabelById(await ensureLabels(), id) ?? getLabelById(await refreshLabels(), id)
 	}
 
-	async function resolve(task: TaskResponse, {field, value, add}: BucketFilterEdit): Promise<FilterBucketWrite> {
+	async function resolve(task: TaskResponse, {field, value, add}: BucketFilterEdit) {
 		const found = add
 			? field === 'assignees'
 				? (await searchProjectUsers(task.project_id, value)).find(user => user.username === value)
@@ -51,8 +53,29 @@ export function useFilterBucketDrop(
 		return {
 			field,
 			add,
-			item: found,
-		} as FilterBucketWrite
+			item: found as WithId<User | Label>,
+		}
+	}
+
+	async function planWrites(task: TaskResponse, edits: BucketFilterEdit[]) {
+		const resolved = await Promise.all(edits.map(edit => resolve(task, edit)))
+		const labels = resolved
+			.filter(edit => edit.field === 'labels')
+			.map(({add, item}) => ({
+				add,
+				label: item as WithId<Label>,
+			}))
+		const assigneeEdits = resolved.filter(edit => edit.field === 'assignees')
+		const assignees = assigneeEdits.length === 0
+			? null
+			: assigneeEdits.reduce((current, {add, item}) => [
+				...current.filter(user => user.id !== item.id),
+				...(add ? [item as WithId<User>] : []),
+			], task.assignees as WithId<User>[])
+		return {
+			labels,
+			assignees,
+		}
 	}
 
 	function placement(target: number, index: number): FilterBucketPlacement | null {
@@ -78,8 +101,8 @@ export function useFilterBucketDrop(
 		const target = filterOf(to)
 		const viewId = toValue(view)?.id
 		if (!target || viewId === undefined) return null
-		const planned = planBucketFilterMove(task, filterOf(from), target)
-		const writes = await Promise.all(planned.map(edit => resolve(task, edit)))
+		const {labels, assignees} = await refreshTask(task.id)
+			.then(fresh => planWrites(fresh, planBucketFilterMove(fresh, filterOf(from), target)))
 			.catch(cause => {
 				error(cause)
 				throw cause
@@ -89,7 +112,8 @@ export function useFilterBucketDrop(
 			view: viewId,
 			params: toValue(params),
 			taskId: task.id,
-			writes,
+			labels,
+			assignees,
 			position,
 			placement: placement(to, index),
 		}

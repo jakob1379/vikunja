@@ -6,6 +6,7 @@ import {
 	tasksBulkCreate,
 	tasksDuplicate,
 	tasksMarkRead,
+	taskAssigneesBulk,
 	taskAssigneesCreate,
 	taskAssigneesDelete,
 	taskLabelsCreate,
@@ -468,56 +469,45 @@ export function moveTaskMutationOptions() {
 	})
 }
 
-export type FilterBucketWrite = {
+export type FilterBucketLabelWrite = {
 	add: boolean
-} & (
-	| {
-		field: 'assignees'
-		item: UserWithId
-	}
-	| {
-		field: 'labels'
-		item: LabelWithId
-	}
-)
+	label: LabelWithId
+}
 
 export type FilterBucketMoveInput = {
 	project: number
 	view: number
 	params: TaskFilterParams
 	taskId: number
-	writes: FilterBucketWrite[]
+	labels: FilterBucketLabelWrite[]
+	assignees: UserWithId[] | null
 	position: number
 	placement: FilterBucketPlacement | null
-}
-
-async function writeFilterBucketValue(task: number, write: FilterBucketWrite) {
-	if (write.field === 'assignees') {
-		const user = write.item.id
-		await (write.add
-			? taskAssigneesCreate({path: {task}, body: {user_id: user}})
-			: taskAssigneesDelete({path: {task, user}}))
-		return
-	}
-	const label = write.item.id
-	await (write.add
-		? taskLabelsCreate({path: {task}, body: {label_id: label}})
-		: taskLabelsDelete({path: {task, label}}))
 }
 
 export function moveTaskBetweenFilterBucketsMutationOptions() {
 	const placed = new WeakSet<FilterBucketMoveInput>()
 	return contextMutationOptions({
-		mutationFn: async ({taskId, view, writes, position}: FilterBucketMoveInput) => {
-			for (const write of writes) await writeFilterBucketValue(taskId, write)
-			return (await tasksPositionUpdate({path: {task: taskId}, body: {project_view_id: view, position}})).data
+		mutationFn: async ({taskId: task, view, labels, assignees, position}: FilterBucketMoveInput) => {
+			for (const {add, label} of labels) {
+				await (add
+					? taskLabelsCreate({path: {task}, body: {label_id: label.id}})
+					: taskLabelsDelete({path: {task, label: label.id}}))
+			}
+			const saved = (await tasksPositionUpdate({path: {task}, body: {project_view_id: view, position}})).data
+			if (assignees) await taskAssigneesBulk({path: {task}, body: {assignees}})
+			return saved
 		},
 		onSuccess: (data, input, client) => {
-			for (const write of input.writes) {
-				mapTaskEverywhere(client, input.taskId, task => write.field === 'assignees'
-					? withAssignee(task, write.item, write.add)
-					: withLabel(task, write.item, write.add))
-			}
+			mapTaskEverywhere(client, input.taskId, task => {
+				const labelled = input.labels.reduce((current, {add, label}) => withLabel(current, label, add), task)
+				return input.assignees
+					? {
+						...labelled,
+						assignees: input.assignees,
+					}
+					: labelled
+			})
 			if (input.placement) {
 				const key = kanbanKeys.board(input.project, input.view, input.params)
 				placeTaskInFilterBuckets(client, key, input.taskId, input.placement)

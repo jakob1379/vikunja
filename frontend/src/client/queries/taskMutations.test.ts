@@ -27,8 +27,9 @@ const sdk = vi.hoisted(() => ({
 	patchTasksRead: vi.fn(),
 	projectTasksList: vi.fn(),
 	projectViewBucketsTasksList: vi.fn(),
+	taskAssigneesBulk: vi.fn(),
 	taskAssigneesCreate: vi.fn(),
-	taskAssigneesDelete: vi.fn(),
+	taskLabelsCreate: vi.fn(),
 	taskBucketUpdate: vi.fn(),
 	tasksBulkCreate: vi.fn(),
 	tasksCreate: vi.fn(),
@@ -554,28 +555,29 @@ describe('task mutations', () => {
 })
 
 describe('moving a task between filter buckets', () => {
-	const jakob = {
+	const alice = {
 		id: 7,
-		username: 'jakob',
+		username: 'alice',
 	}
-	const rasmus = {
+	const bob = {
 		id: 8,
-		username: 'rasmus',
+		username: 'bob',
 	}
 	const input = {
 		project: 1,
 		view: 2,
 		params: {},
 		taskId: 1,
-		writes: [
-			{field: 'assignees' as const, add: true, item: rasmus},
-			{field: 'assignees' as const, add: false, item: jakob},
-		],
+		labels: [{
+			add: true,
+			label: {id: 5, title: 'in progress'},
+		}],
+		assignees: [bob],
 		position: 250,
 		placement: {
 			filters: [
-				[{field: 'assignees' as const, negated: false, values: ['jakob']}],
-				[{field: 'assignees' as const, negated: false, values: ['rasmus']}],
+				[{field: 'assignees' as const, negated: false, values: ['alice']}],
+				[{field: 'assignees' as const, negated: false, values: ['bob']}],
 			],
 			includeNulls: false,
 			target: 1,
@@ -588,7 +590,7 @@ describe('moving a task between filter buckets', () => {
 		sdk.projectViewBucketsTasksList.mockResolvedValue({
 			data: {
 				items: [
-					{id: 0, count: 1, tasks: [{id: 1, position: 100, assignees: [jakob]}]},
+					{id: 0, count: 1, tasks: [{id: 1, position: 100, assignees: [alice]}]},
 					{id: 1, count: 0, tasks: []},
 				],
 			},
@@ -601,9 +603,33 @@ describe('moving a task between filter buckets', () => {
 		return {client, key: board.queryKey, unsubscribe}
 	}
 
+	const writes: string[] = []
+
 	beforeEach(() => {
-		sdk.taskAssigneesCreate.mockResolvedValue({data: {}})
-		sdk.taskAssigneesDelete.mockResolvedValue({data: {}})
+		writes.length = 0
+		sdk.taskLabelsCreate.mockImplementation(async () => {
+			writes.push('label')
+			return {data: {}}
+		})
+		sdk.taskAssigneesBulk.mockImplementation(async () => {
+			writes.push('assignees')
+			return {data: {}}
+		})
+	})
+
+	it('writes the assignees after everything else', async () => {
+		const {client, unsubscribe} = await watchFilterBoard()
+		sdk.tasksPositionUpdate.mockImplementation(async () => {
+			writes.push('position')
+			return {data: {position: 250}}
+		})
+
+		await client.getMutationCache()
+			.build(client, moveTaskBetweenFilterBucketsMutationOptions())
+			.execute(input)
+
+		expect(writes).toEqual(['label', 'position', 'assignees'])
+		unsubscribe()
 	})
 
 	it('patches the task into every bucket it matches without refetching the board', async () => {
@@ -616,7 +642,10 @@ describe('moving a task between filter buckets', () => {
 
 		const board = client.getQueryData<BoardData>(key)!
 		expect(board.buckets[0]).toMatchObject({count: 0, tasks: []})
-		expect(board.buckets[1]).toMatchObject({count: 1, tasks: [{id: 1, position: 250, assignees: [rasmus]}]})
+		expect(board.buckets[1]).toMatchObject({
+			count: 1,
+			tasks: [{id: 1, position: 250, assignees: [bob], labels: [{id: 5}]}],
+		})
 		expect(sdk.projectViewBucketsTasksList).not.toHaveBeenCalled()
 		unsubscribe()
 	})
@@ -629,7 +658,7 @@ describe('moving a task between filter buckets', () => {
 			.build(client, moveTaskBetweenFilterBucketsMutationOptions())
 			.execute(input)).rejects.toThrow('offline')
 
-		expect(sdk.taskAssigneesCreate).toHaveBeenCalled()
+		expect(sdk.taskLabelsCreate).toHaveBeenCalled()
 		expect(sdk.projectViewBucketsTasksList).toHaveBeenCalledTimes(1)
 		unsubscribe()
 	})

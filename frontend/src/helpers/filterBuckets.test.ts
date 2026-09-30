@@ -26,44 +26,44 @@ function task(usernames: string[] = [], labelIds: number[] = []) {
 
 describe('parseBucketFilter', () => {
 	it.each([
-		'assignees in jakob',
-		'assignees = jakob',
-		'assignees not in jakob, rasmus, katrine',
-		'assignees != jakob, rasmus',
-		'assignees ?!= jakob, rasmus',
+		'assignees in alice',
+		'assignees = alice',
+		'assignees not in alice, bob, carol',
+		'assignees != alice, bob',
+		'assignees ?!= alice, bob',
 		'labels ?= 4',
 		'labels in 5',
 		'labels in "5"',
-		'labels in 5 && assignees in jakob',
+		'labels in 5 && assignees in alice',
 	])('accepts %s', filter => {
 		expect(bucket(filter)).not.toBeNull()
 	})
 
 	it.each([
 		'',
-		'assignees in jakob, rasmus',
-		'assignees = jakob, rasmus',
+		'assignees in alice, bob',
+		'assignees = alice, bob',
 		'labels in 5 || labels in 6',
-		'(labels in 5) && assignees in jakob',
+		'(labels in 5) && assignees in alice',
 		'labels in 5 && priority > 3',
 		'due_date < now',
 		'done = false',
 		'assignees like jak',
-		'Assignees IN jakob',
+		'Assignees IN alice',
 		'labels in "foo bar"',
 	])('rejects %s', filter => {
 		expect(bucket(filter)).toBeNull()
 	})
 
 	it('rejects a bucket that also searches', () => {
-		expect(bucket('assignees in jakob', 'foo')).toBeNull()
+		expect(bucket('assignees in alice', 'foo')).toBeNull()
 	})
 
 	it('strips quotes from values', () => {
-		expect(bucket('assignees in "jakob"')).toEqual([{
+		expect(bucket('assignees in "alice"')).toEqual([{
 			field: 'assignees',
 			negated: false,
-			values: ['jakob'],
+			values: ['alice'],
 		}])
 	})
 
@@ -78,27 +78,27 @@ describe('parseBucketFilter', () => {
 
 describe('matchesBucketFilter', () => {
 	it('requires every clause', () => {
-		const filter = bucket('labels in 5 && assignees in jakob')!
-		expect(matchesBucketFilter(task(['jakob'], [5]), filter)).toBe(true)
-		expect(matchesBucketFilter(task(['jakob']), filter)).toBe(false)
+		const filter = bucket('labels in 5 && assignees in alice')!
+		expect(matchesBucketFilter(task(['alice'], [5]), filter)).toBe(true)
+		expect(matchesBucketFilter(task(['alice']), filter)).toBe(false)
 	})
 
 	it('matches labels by numeric id and users by exact username', () => {
 		expect(matchesBucketFilter(task([], [5]), bucket('labels in 05')!)).toBe(true)
-		expect(matchesBucketFilter(task(['Jakob']), bucket('assignees in jakob')!)).toBe(false)
+		expect(matchesBucketFilter(task(['Alice']), bucket('assignees in alice')!)).toBe(false)
 	})
 
 	it('matches the catch-all when none of the excluded values are present', () => {
-		const filter = bucket('assignees not in jakob, rasmus')!
+		const filter = bucket('assignees not in alice, bob')!
 		expect(matchesBucketFilter(task(), filter)).toBe(true)
-		expect(matchesBucketFilter(task(['troels']), filter)).toBe(true)
-		expect(matchesBucketFilter(task(['rasmus']), filter)).toBe(false)
+		expect(matchesBucketFilter(task(['dave']), filter)).toBe(true)
+		expect(matchesBucketFilter(task(['bob']), filter)).toBe(false)
 	})
 
 	it('matches tasks without a value when nulls are included', () => {
-		const filter = bucket('assignees in jakob')!
+		const filter = bucket('assignees in alice')!
 		expect(matchesBucketFilter(task(), filter, true)).toBe(true)
-		expect(matchesBucketFilter(task(['rasmus']), filter, true)).toBe(false)
+		expect(matchesBucketFilter(task(['bob']), filter, true)).toBe(false)
 	})
 })
 
@@ -113,56 +113,56 @@ describe('planBucketFilterMove', () => {
 
 	it('reassigns between single-assignee buckets', () => {
 		const edits = planBucketFilterMove(
-			task(['jakob']),
-			bucket('assignees in jakob'),
-			bucket('assignees in rasmus')!,
+			task(['alice']),
+			bucket('assignees in alice'),
+			bucket('assignees in bob')!,
 		)
 		expect(edits).toEqual([
-			add('assignees', 'rasmus'),
-			remove('assignees', 'jakob'),
+			add('assignees', 'bob'),
+			remove('assignees', 'alice'),
 		])
 	})
 
 	it('assigns from the catch-all without removing anything', () => {
 		const edits = planBucketFilterMove(
 			task(),
-			bucket('assignees not in jakob, rasmus'),
-			bucket('assignees in jakob')!,
+			bucket('assignees not in alice, bob'),
+			bucket('assignees in alice')!,
 		)
 		expect(edits).toEqual([
-			add('assignees', 'jakob'),
+			add('assignees', 'alice'),
 		])
 	})
 
 	it('unassigns every excluded user when dropped on the catch-all', () => {
 		const edits = planBucketFilterMove(
-			task(['jakob', 'rasmus', 'troels']),
-			bucket('assignees in jakob'),
-			bucket('assignees not in jakob, rasmus')!,
+			task(['alice', 'bob', 'dave']),
+			bucket('assignees in alice'),
+			bucket('assignees not in alice, bob')!,
 		)
 		expect(edits).toEqual([
-			remove('assignees', 'jakob'),
-			remove('assignees', 'rasmus'),
+			remove('assignees', 'alice'),
+			remove('assignees', 'bob'),
 		])
 	})
 
 	it('applies every value of a multi-clause target in one drop', () => {
 		const edits = planBucketFilterMove(
 			task(),
-			bucket('assignees not in jakob'),
-			bucket('labels in 5 && assignees in jakob')!,
+			bucket('assignees not in alice'),
+			bucket('labels in 5 && assignees in alice')!,
 		)
 		expect(edits).toEqual([
 			add('labels', '5'),
-			add('assignees', 'jakob'),
+			add('assignees', 'alice'),
 		])
 	})
 
 	it('keeps source values the target also requires', () => {
 		const edits = planBucketFilterMove(
-			task(['jakob'], [5]),
-			bucket('labels in 5 && assignees in jakob'),
-			bucket('labels in 6 && assignees in jakob')!,
+			task(['alice'], [5]),
+			bucket('labels in 5 && assignees in alice'),
+			bucket('labels in 6 && assignees in alice')!,
 		)
 		expect(edits).toEqual([
 			add('labels', '6'),
@@ -171,26 +171,26 @@ describe('planBucketFilterMove', () => {
 	})
 
 	it('only applies the target when the source bucket is not editable', () => {
-		expect(planBucketFilterMove(task(['rasmus']), null, bucket('assignees in jakob')!)).toEqual([
-			add('assignees', 'jakob'),
+		expect(planBucketFilterMove(task(['bob']), null, bucket('assignees in alice')!)).toEqual([
+			add('assignees', 'alice'),
 		])
 	})
 
 	it('removes a value only once when the source requires it and the target excludes it', () => {
 		const edits = planBucketFilterMove(
-			task(['jakob']),
-			bucket('assignees in jakob'),
-			bucket('assignees not in jakob, rasmus')!,
+			task(['alice']),
+			bucket('assignees in alice'),
+			bucket('assignees not in alice, bob')!,
 		)
 		expect(edits).toEqual([
-			remove('assignees', 'jakob'),
+			remove('assignees', 'alice'),
 		])
 	})
 
 	it('skips values the task already has', () => {
-		const edits = planBucketFilterMove(task(['jakob'], [6]), bucket('assignees in jakob'), bucket('labels in 6')!)
+		const edits = planBucketFilterMove(task(['alice'], [6]), bucket('assignees in alice'), bucket('labels in 6')!)
 		expect(edits).toEqual([
-			remove('assignees', 'jakob'),
+			remove('assignees', 'alice'),
 		])
 	})
 })

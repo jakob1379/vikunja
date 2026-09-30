@@ -220,7 +220,7 @@
 											:data-task-id="task.id"
 										>
 											<span
-												v-if="canDragTasks && isTouchDevice"
+												v-if="canDragOnBoard && isTouchDevice"
 												class="handle"
 												@click="openTask(task)"
 												@touchstart.passive="onHandleTouchStart"
@@ -294,7 +294,11 @@
 import {useKanban} from '@/composables/useKanban'
 import {bucketHasMore, kanbanKeys, type BucketResponse} from '@/client/queries/kanban'
 import {removeTaskFromBoard} from '@/client/queries/taskCache'
-import {useUpdateTaskPositionMutation, useMoveTaskMutation} from '@/client/queries/taskMutations'
+import {
+	useMoveTaskBetweenFilterBucketsMutation,
+	useMoveTaskMutation,
+	useUpdateTaskPositionMutation,
+} from '@/client/queries/taskMutations'
 import {
 	useCreateBucketMutation,
 	useDeleteBucketMutation,
@@ -331,7 +335,7 @@ import {getSavedFilterIdFromProjectId, isSavedFilterProject} from '@/client/quer
 import {savedFilterQuery} from '@/client/queries/savedFilters'
 import {useCurrentProject} from '@/composables/useCurrentProject'
 import {useTaskDragToProject} from '@/composables/useTaskDragToProject'
-import {useFilterBucketMove} from '@/composables/useFilterBucketMove'
+import {useFilterBucketDrop} from '@/composables/useFilterBucketDrop'
 import type {TaskFilterParams, TaskResponse} from '@/client/queries/tasks'
 import type {ProjectView} from '@/client/generated'
 import {createProjectViewUpdate, useUpdateProjectViewMutation} from '@/client/queries/projectViews'
@@ -367,6 +371,7 @@ const authStore = useAuthStore()
 const alwaysShowBucketTaskCount = computed(() => authStore.settings.frontendSettings.alwaysShowBucketTaskCount)
 const {handleTaskDropToProject} = useTaskDragToProject()
 const positionMutation = useUpdateTaskPositionMutation()
+const filterMoveMutation = useMoveTaskBetweenFilterBucketsMutation()
 const moveMutation = useMoveTaskMutation()
 
 const savedFilter = useQuery(computed(() => savedFilterQuery(getSavedFilterIdFromProjectId(projectId.value)))).data
@@ -448,19 +453,16 @@ const hasWritePermission = computed(() =>
 )
 const canWrite = computed(() => hasWritePermission.value && view.value?.bucket_configuration_mode === 'manual')
 const isFilterBoard = computed(() => view.value?.bucket_configuration_mode === 'filter')
-const filterBucketMove = useFilterBucketMove(projectId, view, () => boardParams.value)
+const filterBucketDrop = useFilterBucketDrop(projectId, view, () => boardParams.value)
 const savingFilterMove = ref(false)
-const canDragTasks = computed(() => canWrite.value || (
-	hasWritePermission.value &&
-	isFilterBoard.value &&
-	!savingFilterMove.value
-))
+const canDragOnBoard = computed(() => canWrite.value || (hasWritePermission.value && isFilterBoard.value))
+const canDragTasks = computed(() => canDragOnBoard.value && !savingFilterMove.value)
 
 function taskGroup(bucket: BucketResponse) {
 	return {
 		name: 'tasks',
 		put: (_to: unknown, _from: unknown, dragged: HTMLElement) => isFilterBoard.value
-			? filterBucketMove.canDrop(bucket.id) &&
+			? filterBucketDrop.canDrop(bucket.id) &&
 				!bucket.tasks.some(task => task.id === Number(dragged.dataset.taskId))
 			: shouldAcceptDrop(bucket) && !dragBucket.value,
 	}
@@ -579,7 +581,6 @@ async function updateTaskPosition(e) {
 	const view = props.viewId
 	drag.value = false
 	savingFilterMove.value = isFilterBoard.value
-	let refetchBoard = false
 	try {
 		const {moved} = await handleTaskDropToProject(e, task => {
 			// A moved task stays in a pseudo-project board (favorites, saved filters) until the board is re-read.
@@ -594,24 +595,27 @@ async function updateTaskPosition(e) {
 		const task = bucket.tasks[index]
 		const before = bucket.tasks[index - 1]
 		const after = bucket.tasks[index + 1]
-		if (bucket.id !== sourceBucket.value) {
-			if (isFilterBoard.value) {
-				refetchBoard = await filterBucketMove.move({
-					task,
-					from: sourceBucket.value,
-					to: bucket.id,
-					index,
-				})
-			} else {
+		const position = calculateItemPosition(before?.position ?? null, after?.position ?? null)
+		if (isFilterBoard.value && bucket.id !== sourceBucket.value) {
+			const input = await filterBucketDrop.prepare({
+				task,
+				from: sourceBucket.value,
+				to: bucket.id,
+				index,
+				position,
+			})
+			if (input) await filterMoveMutation.mutateAsync(input)
+		} else {
+			if (bucket.id !== sourceBucket.value) {
 				const result = await moveMutation.mutateAsync({project, view, bucket: bucket.id, task})
 				if (result.bucket_id !== undefined && result.bucket_id !== bucket.id) return
 			}
+			await positionMutation.mutateAsync({
+				taskId: task.id,
+				project_view_id: view,
+				position,
+			})
 		}
-		await positionMutation.mutateAsync({
-			taskId: task.id,
-			project_view_id: view,
-			position: calculateItemPosition(before?.position ?? null, after?.position ?? null),
-		})
 
 		// Dropping at the top gives position 0, which the next task may already have.
 		if (index === 0 && after?.position === 0) {
@@ -622,7 +626,6 @@ async function updateTaskPosition(e) {
 				position: calculateItemPosition(0, afterAfter?.position ?? null),
 			})
 		}
-		if (refetchBoard) await filterBucketMove.refetchBoard()
 	} catch { return } finally {
 		board.endDrag()
 		savingFilterMove.value = false

@@ -25,7 +25,8 @@ function parseClause(clause: string): BucketFilterClause | null {
 	if (!match) return null
 	const [, field, operator, list] = match
 	const negated = ['!=', '?!=', 'not in'].includes(operator)
-	const values = trimQuotes(list).split(',').map(trimQuotes).filter(Boolean)
+	const unquoted = trimQuotes(list)
+	const values = (/["']/.test(unquoted) ? list : unquoted).split(',').map(trimQuotes).filter(Boolean)
 	if (values.length === 0 || (values.length > 1 && !negated)) return null
 	if (field === 'labels' && !values.every(value => /^\d+$/.test(value))) return null
 	return {

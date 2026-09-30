@@ -70,6 +70,10 @@ describe('parseBucketFilter', () => {
 	it('unquotes a whole list before splitting it', () => {
 		expect(bucket('assignees not in "alice, bob"')?.[0].values).toEqual(['alice', 'bob'])
 	})
+
+	it('unquotes each value of a list quoted per item', () => {
+		expect(bucket('assignees not in "alice", "bob"')?.[0].values).toEqual(['alice', 'bob'])
+	})
 })
 
 describe('matchesBucketFilter', () => {

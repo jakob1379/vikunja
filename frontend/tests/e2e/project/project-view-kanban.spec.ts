@@ -646,10 +646,48 @@ test.describe('Project View Kanban with filter buckets', () => {
 		await card.dragTo(bucketTasks(page, 2))
 		await expect(bucketTasks(page, 1)).toContainText(task.title)
 		await expect(bucketTasks(page, 2)).not.toContainText(task.title)
+		await expect(page.locator('.kanban .tasks.dragging-disabled')).toHaveCount(0)
 
 		await card.dragTo(bucketTasks(page, 3))
 		await expect.poll(async () => (await getTask(apiContext, headers, task.id)).assignees?.map(user => user.username))
 			.toEqual([first.username])
 		expect((await getTask(apiContext, headers, task.id)).priority).toBe(1)
+	})
+
+	test('Refreshes read-only buckets that depend on the changed assignee', async ({
+		authenticatedPage: page,
+		apiContext,
+		userToken,
+	}) => {
+		const {project, view, users: [first]} = await createFilterBoard(apiContext, userToken, ([a, b]) => [
+			{
+				title: 'First',
+				filter: `assignees in ${a.username}`,
+			},
+			{
+				title: 'Second',
+				filter: `assignees in ${b.username}`,
+			},
+			{
+				title: 'Either',
+				filter: `assignees in ${b.username} || priority > 3`,
+			},
+		])
+		const [task] = await TaskFactory.create(1, {
+			project_id: project.id,
+			priority: 1,
+		})
+		await TaskAssigneeFactory.create(1, {
+			task_id: task.id,
+			user_id: first.id,
+		})
+
+		await page.goto(`/projects/${project.id}/${view.id}`)
+		await expect(bucketTasks(page, 3)).not.toContainText(task.title)
+		await bucketTasks(page, 1).locator('.task').filter({hasText: task.title}).dragTo(bucketTasks(page, 2))
+
+		await expect(bucketTasks(page, 2)).toContainText(task.title)
+		await expect(bucketTasks(page, 3)).toContainText(task.title)
+		await expect(bucketTasks(page, 1)).not.toContainText(task.title)
 	})
 })
